@@ -116,10 +116,11 @@
         
         let isSubmitting = false;
         let currentQuestion = ""; // Variabile per memorizzare la domanda attuale
+        let currentConfig = null; // Aggiunto per salvare la configurazione globalmente
 
         // Configurazione di default (usata se GAS non è ancora configurato o se salta la connessione)
         const defaultConfig = {
-            question: "Come ti senti oggi?",
+            questions: ["Come ti senti oggi?", "Com'è andata la giornata?"],
             options: [
                 { emoji: "😢", label: "Triste", value: "Triste" },
                 { emoji: "😕", label: "Confuso", value: "Confuso" },
@@ -131,34 +132,40 @@
 
         // Inizializza l'app chiedendo la configurazione attuale a Google Sheets
         async function initApp() {
-            let config = defaultConfig;
+            currentConfig = defaultConfig;
             
-            if (SCRIPT_URL !== 'https://script.google.com/macros/s/AKfycbx95lDQOcBrIn_gC80Lmrna9u-XWEiXZ-fwDY09us-_fggKYKVzJKqHSExegdPIq5W3Pg/exec') {
-                try {
-                    // Effettua una chiamata GET per leggere la configurazione dal foglio
-                    const response = await fetch(SCRIPT_URL);
-                    config = await response.json();
-                } catch (error) {
-                    console.error('Errore nel caricamento della configurazione dal foglio, uso fallback:', error);
+            try {
+                // Effettua una chiamata GET con cache-buster (?t=...) per forzare il download di emoji e domande fresche
+                const response = await fetch(SCRIPT_URL + "?t=" + new Date().getTime());
+                currentConfig = await response.json();
+                
+                // Retrocompatibilità se per caso il GAS dovesse inviare 'question' invece di 'questions'
+                if(currentConfig.question && !currentConfig.questions) {
+                    currentConfig.questions = [currentConfig.question];
                 }
+            } catch (error) {
+                console.error('Errore nel caricamento della configurazione dal foglio, uso fallback:', error);
             }
             
-            currentQuestion = config.question; // Salviamo la domanda per inviarla dopo
-            renderApp(config);
+            renderApp();
         }
 
         // Genera dinamicamente le carte nell'interfaccia in base alla configurazione ricevuta
-        function renderApp(config) {
+        function renderApp() {
             const mainScreen = document.getElementById('main-screen');
+            
+            // Sceglie una domanda casuale dalla lista
+            const questions = currentConfig.questions || ["Come ti senti oggi?"];
+            currentQuestion = questions[Math.floor(Math.random() * questions.length)];
             
             // Usiamo flex-wrap così se imposti 3, 4 o 6 risposte, si adatteranno da sole al centro
             let html = `
-                <h1 class="text-4xl md:text-6xl font-extrabold text-gray-800 mb-8 md:mb-12 drop-shadow-sm tracking-tight leading-tight">
-                    ${config.question}
+                <h1 class="text-4xl md:text-6xl font-extrabold text-gray-800 mb-8 md:mb-12 drop-shadow-sm tracking-tight leading-tight fade-in">
+                    ${currentQuestion}
                 </h1>
                 <div class="flex flex-wrap justify-center gap-4 md:gap-6">`;
             
-            config.options.forEach(opt => {
+            currentConfig.options.forEach(opt => {
                 html += `
                     <button onclick="sendMood('${opt.value}', this)" class="emoji-card rounded-3xl p-6 md:p-8 flex flex-col items-center justify-center focus:outline-none w-[42%] md:w-auto md:min-w-[160px]">
                         <div class="text-6xl md:text-8xl mb-4 filter drop-shadow-sm">${opt.emoji}</div>
@@ -180,18 +187,14 @@
             thankYouScreen.classList.add('fade-in');
 
             try {
-                if (SCRIPT_URL === 'https://script.google.com/macros/s/AKfycbx95lDQOcBrIn_gC80Lmrna9u-XWEiXZ-fwDY09us-_fggKYKVzJKqHSExegdPIq5W3Pg/exec') {
-                    console.log('Simulazione invio dati:', { risposta: moodValue, domanda: currentQuestion, timestamp: new Date().toISOString() });
-                } else {
-                    await fetch(SCRIPT_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'text/plain;charset=utf-8', 
-                        },
-                        // Ora inviamo sia il mood (risposta) sia la domanda corrente
-                        body: JSON.stringify({ mood: moodValue, question: currentQuestion })
-                    });
-                }
+                await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8', 
+                    },
+                    // Ora inviamo sia il mood (risposta) sia la domanda corrente
+                    body: JSON.stringify({ mood: moodValue, question: currentQuestion })
+                });
             } catch (error) {
                 console.error('Errore durante l\'invio:', error);
             } finally {
@@ -199,6 +202,9 @@
                     thankYouScreen.classList.add('hidden');
                     thankYouScreen.classList.remove('fade-in');
                     isSubmitting = false;
+                    
+                    // 🔄 Ridisegna l'app con una nuova domanda per il prossimo bambino!
+                    renderApp();
                 }, 3000);
             }
         }
